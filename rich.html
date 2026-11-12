@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<link rel="stylesheet" href="css/sample.css">
+<title>あみだくじゃんけん</title>
+<style>
+main { text-align: center; }
+
+.svg-container {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+}
+svg {
+  width: 100%;
+  height: auto;
+  border: 1px solid #e5e7eb;
+  background-color: #fafafa;
+}
+
+/* あみだの線 */
+.ladder line {
+  stroke: #999;
+  stroke-width: 3;
+}
+
+/* たどる線（アニメーション） */
+#route {
+  fill: none;
+  stroke: red;
+  stroke-width: 5;
+  stroke-linejoin: round;
+}
+.drawing {
+  stroke-dasharray: var(--len);
+  stroke-dashoffset: var(--len);
+  animation: draw 2.5s linear forwards;
+}
+@keyframes draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* 上のボタン（自分の手） */
+.hand-btn {
+  font-size: 16px;
+  padding: 8px 14px;
+  margin: 0 6px;
+  cursor: pointer;
+}
+.hand-btn:disabled { cursor: default; opacity: .5; }
+
+/* 下のラベル（コンピュータの手） */
+.goal-label {
+  font-size: 18px;
+  text-anchor: middle;
+}
+
+#judgment { font-size: 28px; font-weight: bold; margin: 10px; min-height: 40px; }
+#retry { display: none; font-size: 16px; padding: 8px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>あみだくじゃんけん</h1>
+</header>
+<main>
+  <p>手を選ぶと、あみだをたどった先がコンピュータの手になるよ！</p>
+
+  <!-- 自分の手（あみだのスタート） -->
+  <div>
+    <button class="hand-btn" data-col="0">グー<span class="rate"></span></button>
+    <button class="hand-btn" data-col="1">チョキ<span class="rate"></span></button>
+    <button class="hand-btn" data-col="2">パー<span class="rate"></span></button>
+  </div>
+
+  <div class="svg-container">
+    <!-- viewBox: 幅300 高さ420 -->
+    <svg viewBox="0 0 300 420" xmlns="http://www.w3.org/2000/svg">
+      <g class="ladder" id="ladder"></g>
+      <path id="route"></path>
+      <g id="goals"></g>
+    </svg>
+  </div>
+
+  <div>コンピュータの手は「<span id="pc_hands">？</span>」</div>
+  <div id="judgment"></div>
+  <button id="retry">もう一回</button>
+</main>
+<footer></footer>
+
+<script>
+const SVG_NS = "http://www.w3.org/2000/svg";
+const HANDS = ["グー", "チョキ", "パー"];
+const XS = [50, 150, 250];   // 縦線のX座標
+const TOP = 20;              // 縦線の上端
+const BOTTOM = 360;          // 縦線の下端
+
+let bars = [];        // 横線のリスト { y, left }  left=0なら0-1列の間, 1なら1-2列の間
+let goalHands = [];   // 下の各列に置かれたコンピュータの手
+let playing = false;
+let playCount = 0;      //総試合回数
+let winCount = 0;    //勝利回数
+let guwinCount = 0;   //グーの勝利回数
+let guplayCount = 0;  //グーのプレイ回数
+let chokiwinCount = 0; //チョキの勝利回数
+let chokiplayCount = 0; //チョキのプレイ回数
+let pawinCount = 0;   //パーの勝利回数
+let paplayCount = 0; //パーのプレイ回数
+
+
+
+// SVGの要素を作る小さな関数
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// 配列をシャッフル
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// あみだを新しく作る
+function makeAmida() {
+  $("#ladder").empty();
+  $("#goals").empty();
+  $("#route").removeClass("drawing").attr("d", "");
+
+  // 横線をランダムに作る（高さを等間隔に区切り、それぞれ左か右に1本）
+  bars = [];
+  const levels = 7;
+  for (let i = 0; i < levels; i++) {
+    const y = TOP + 40 + i * ((BOTTOM - TOP - 80) / (levels - 1));
+    bars.push({ y: y, left: Math.floor(Math.random() * 2) });
+  }
+
+  // 縦線を描く
+  const ladder = document.getElementById("ladder");
+  XS.forEach(x => ladder.appendChild(svgEl("line", { x1: x, y1: TOP, x2: x, y2: BOTTOM })));
+  // 横線を描く
+  bars.forEach(b => ladder.appendChild(svgEl("line", {
+    x1: XS[b.left], y1: b.y, x2: XS[b.left + 1], y2: b.y
+  })));
+
+  // ゴールにコンピュータの手をランダムに配置（最初は？で隠す）
+  goalHands = shuffle(HANDS);
+  const goals = document.getElementById("goals");
+  XS.forEach((x, i) => {
+    const t = svgEl("text", { x: x, y: BOTTOM + 40, class: "goal-label", id: "goal" + i });
+    t.textContent = "？";
+    goals.appendChild(t);
+  });
+
+  $("#pc_hands").text("？");
+  $("#judgment").text("");
+  $("#retry").hide();
+  $(".hand-btn").prop("disabled", false);
+  playing = false;
+}
+
+// スタート列からあみだをたどって、通る点のリストとゴール列を返す
+function trace(col) {
+  const points = [[XS[col], TOP]];
+  bars.forEach(b => {
+    if (b.left === col) {          // 右へ移動
+      points.push([XS[col], b.y]);
+      col = col + 1;
+      points.push([XS[col], b.y]);
+    } else if (b.left + 1 === col) { // 左へ移動
+      points.push([XS[col], b.y]);
+      col = col - 1;
+      points.push([XS[col], b.y]);
+    }
+  });
+  points.push([XS[col], BOTTOM]);
+  return { points: points, goal: col };
+}
+
+// 勝ち負け判定（0:グー 1:チョキ 2:パー）
+function judge(me, pc) {
+  if (me === pc) return "あいこ";
+  if ((me + 1) % 3 === pc){ winCount++; if (me === 0) guwinCount++; else if (me === 1) chokiwinCount++; else pawinCount++; return "かち！"; }              //勝利回数カウント
+  return "まけ…";
+}
+
+// 手を選んだとき
+$(".hand-btn").on("click", function () {
+  if (playing) return;
+  playCount += 1       //総試合数計算
+  playing = true;
+ 
+  $(".hand-btn").prop("disabled", true);
+
+  const col = Number($(this).data("col"));
+  const myHand = col; // 上の並びはグー・チョキ・パー
+  const result = trace(col);
+
+  if(myHand === 0) {guplayCount += 1;} else if (myHand === 1) {chokiplayCount += 1; }else {paplayCount += 1; } //プレイ回数計算
+ 
+  console.log("試合回数"+playCount);  //回数表示
+  console.log("勝利回数"+winCount); //勝利回数表示
+  console.log("グーの勝利回数"+guwinCount); //グーの勝利回数表示
+  console.log("チョキの勝利回数"+chokiwinCount); //チョキの勝利回数表示
+  console.log("パーの勝利回数"+pawinCount); //パーの勝利回数表示
+
+  // 通るルートを線で描く
+  const d = result.points.map((p, i) => (i === 0 ? "M" : "L") + p[0] + "," + p[1]).join(" ");
+  const route = document.getElementById("route");
+  route.setAttribute("d", d);
+  const len = route.getTotalLength();
+  route.style.setProperty("--len", len);
+  $("#route").removeClass("drawing");
+  route.getBoundingClientRect(); // アニメーションをリセットするため
+  $("#route").addClass("drawing");
+
+  // 線を引き終わったら結果を表示
+  setTimeout(function () {
+    if(guplayCount > 0){guRate = Math.round(guwinCount / guplayCount * 100);} else {guRate = 0;} //グーの勝率計算
+    if(chokiplayCount > 0){chokiRate = Math.round(chokiwinCount / chokiplayCount * 100);} else {chokiRate = 0;} //チョキの勝率計算
+    if(paplayCount > 0){paRate = Math.round(pawinCount / paplayCount * 100);} else {paRate = 0;} //パーの勝率計算
+
+    const pcHandName = goalHands[result.goal];
+    const pcHand = HANDS.indexOf(pcHandName);
+    // ゴールの手を全部見せる
+    goalHands.forEach((h, i) => $("#goal" + i).text(h));
+    $("#goal" + result.goal).attr("fill", "red");
+    $("#pc_hands").text(pcHandName);
+    $("#judgment").text(judge(myHand, pcHand));
+    $("#retry").show();
+    $(".rate").eq(0).text("（勝率"+guRate+"%）"); //グーの勝率表示
+    $(".rate").eq(1).text("（勝率"+chokiRate+"%）"); //チョキの勝率表示
+    $(".rate").eq(2).text("（勝率"+paRate+"%）"); //パーの勝率表示
+  }, 2600);
+});
+
+$("#retry").on("click", makeAmida);
+
+makeAmida();
+
+</script>
+</body>
+</html>
